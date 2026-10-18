@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 턴 번호 정리
 // @namespace    turn-fix.crack
-// @version      1.2.1
+// @version      1.2.3
 // @description  AI 답변 상태줄의 턴 숫자가 틀리거나 비어 있을 때, 대화 순서대로 다시 세서 그 숫자만 고쳐 줍니다. 날짜·시간·나머지 글은 건드리지 않아요.
 // @match        https://crack.wrtn.ai/*
 // @noframes
@@ -444,31 +444,36 @@
   // 못 찾으면 예전처럼 오른쪽 아래 떠 있는 # 버튼을 대신 보여줘요.
   const INLINE_ID = 'turn-fix-inline';
   const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-  // 1순위: "울트라챗" 글자가 든 버튼 / 2순위(폰처럼 글자가 접힌 화면): 입력창 아래 아이콘 줄에서 보내기 버튼 바로 앞 버튼
+  // 입력창(메시지 보내기) 아래 줄의 맨 오른쪽 = 전송 버튼을 화면 위치로 찾아요.
+  // 모델 이름(울트라챗/하이퍼챗…)이나 버튼 태그와 상관없이 동작하고, # 은 전송 버튼 바로 왼쪽(OFF 옆)에 들어가요.
   function findModelButton() {
-    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let best = null, bestY = -1;
-    for (let n = w.nextNode(); n; n = w.nextNode()) {
-      if (!n.nodeValue.includes('울트라챗')) continue;
-      const el = n.parentElement && n.parentElement.closest('button,[role="button"]');
-      if (!el || el.id === INLINE_ID || !visible(el)) continue;
-      const r = el.getBoundingClientRect();
-      if (r.top > bestY) { best = el; bestY = r.top; }
-    }
-    if (best) return best;
-
     const boxes = [...document.querySelectorAll('textarea,[contenteditable="true"],[role="textbox"]')].filter(visible);
     const box = boxes.sort((x, y) => y.getBoundingClientRect().top - x.getBoundingClientRect().top)[0];
     if (!box) return null;
-    const bBottom = box.getBoundingClientRect().bottom;
-    for (let up = box, i = 0; up && i < 7; up = up.parentElement, i++) {
-      const btns = [...up.querySelectorAll('button,[role="button"]')]
-        .filter(el => el.id !== INLINE_ID && visible(el) && el.getBoundingClientRect().top >= bBottom - 6);
-      if (btns.length < 2) continue;
-      const rowTop = Math.max(...btns.map(el => el.getBoundingClientRect().top));
-      const row = btns.filter(el => Math.abs(el.getBoundingClientRect().top - rowTop) < 14)
-        .sort((x, y) => x.getBoundingClientRect().left - y.getBoundingClientRect().left);
-      if (row.length >= 2) return row[row.length - 2]; // 맨 오른쪽은 보내기 버튼, 그 앞(모델 선택) 왼쪽에 끼움
+    const bb = box.getBoundingClientRect();
+    let comp = null;
+    for (let up = box.parentElement, i = 0; up && i < 8; up = up.parentElement, i++) {
+      const r = up.getBoundingClientRect();
+      if (r.bottom - bb.bottom >= 35 && r.width >= bb.width) { comp = up; break; }
+    }
+    if (!comp) return null;
+    const cr = comp.getBoundingClientRect();
+    // 1순위: 입력창 안에서 "가장 오른쪽 아래"에 있는 버튼 = 전송(▶) 버튼. OFF/모델 버튼이 바뀌어도 상관없어요.
+    const lift = el => { while (el.parentElement && el.parentElement !== comp && el.parentElement.children.length < 2) el = el.parentElement; return el.parentElement && el.parentElement.children.length >= 2 ? el : null; };
+    const cands = [...comp.querySelectorAll('button,[role="button"],[type="submit"]')]
+      .filter(el => el.id !== INLINE_ID && !box.contains(el) && visible(el) && el.getBoundingClientRect().top >= bb.bottom - 6);
+    cands.sort((x, y) => {
+      const a = x.getBoundingClientRect(), b = y.getBoundingClientRect();
+      return (b.right - a.right) || (b.bottom - a.bottom);
+    });
+    const send = cands.find(el => !cands.some(o => o !== el && el.contains(o))); // 안쪽 아이콘이 아닌 버튼 본체
+    if (send) { const t = lift(send); if (t) return t; }
+    // 2순위: 오른쪽 아래 구석을 화면 위치로 찍어서 찾기
+    for (const [dx, dy] of [[28, 28], [24, 26], [34, 30], [30, 22], [22, 34]]) {
+      let el = document.elementFromPoint(cr.right - dx, cr.bottom - dy);
+      if (!el || !comp.contains(el) || el === comp || box.contains(el) || el.id === INLINE_ID) continue;
+      while (el.parentElement && el.parentElement !== comp && el.parentElement.children.length < 2) el = el.parentElement;
+      if (el.parentElement && el.parentElement.children.length >= 2) return el;
     }
     return null;
   }
