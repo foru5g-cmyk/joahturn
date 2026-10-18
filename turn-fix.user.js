@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 턴 번호 정리
 // @namespace    turn-fix.crack
-// @version      1.2.0
+// @version      1.2.1
 // @description  AI 답변 상태줄의 턴 숫자가 틀리거나 비어 있을 때, 대화 순서대로 다시 세서 그 숫자만 고쳐 줍니다. 날짜·시간·나머지 글은 건드리지 않아요.
 // @match        https://crack.wrtn.ai/*
 // @noframes
@@ -443,17 +443,34 @@
   // 입력창 아래 아이콘 줄에서 "울트라챗" 버튼을 찾아, 그 바로 왼쪽에 아이콘 크기로 끼워 넣어요.
   // 못 찾으면 예전처럼 오른쪽 아래 떠 있는 # 버튼을 대신 보여줘요.
   const INLINE_ID = 'turn-fix-inline';
+  const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  // 1순위: "울트라챗" 글자가 든 버튼 / 2순위(폰처럼 글자가 접힌 화면): 입력창 아래 아이콘 줄에서 보내기 버튼 바로 앞 버튼
   function findModelButton() {
     const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let best = null, bestY = -1;
     for (let n = w.nextNode(); n; n = w.nextNode()) {
       if (!n.nodeValue.includes('울트라챗')) continue;
       const el = n.parentElement && n.parentElement.closest('button,[role="button"]');
-      if (!el || el.id === INLINE_ID) continue;
+      if (!el || el.id === INLINE_ID || !visible(el)) continue;
       const r = el.getBoundingClientRect();
-      if (r.width && r.top > bestY) { best = el; bestY = r.top; } // 여러 개면 가장 아래쪽(입력창) 것
+      if (r.top > bestY) { best = el; bestY = r.top; }
     }
-    return best;
+    if (best) return best;
+
+    const boxes = [...document.querySelectorAll('textarea,[contenteditable="true"],[role="textbox"]')].filter(visible);
+    const box = boxes.sort((x, y) => y.getBoundingClientRect().top - x.getBoundingClientRect().top)[0];
+    if (!box) return null;
+    const bBottom = box.getBoundingClientRect().bottom;
+    for (let up = box, i = 0; up && i < 7; up = up.parentElement, i++) {
+      const btns = [...up.querySelectorAll('button,[role="button"]')]
+        .filter(el => el.id !== INLINE_ID && visible(el) && el.getBoundingClientRect().top >= bBottom - 6);
+      if (btns.length < 2) continue;
+      const rowTop = Math.max(...btns.map(el => el.getBoundingClientRect().top));
+      const row = btns.filter(el => Math.abs(el.getBoundingClientRect().top - rowTop) < 14)
+        .sort((x, y) => x.getBoundingClientRect().left - y.getBoundingClientRect().left);
+      if (row.length >= 2) return row[row.length - 2]; // 맨 오른쪽은 보내기 버튼, 그 앞(모델 선택) 왼쪽에 끼움
+    }
+    return null;
   }
   function ensureInline() {
     const cur = document.getElementById(INLINE_ID);
@@ -473,12 +490,14 @@
   }
 
   // 채팅방에서만 # 버튼을 보여 줍니다. (크랙은 페이지 이동 없이 주소만 바뀌고 화면도 다시 그려져서 주기적으로 확인)
-  let lastPath = '';
+  let lastPath = '', fails = 0;
   setInterval(() => {
     const inChat = !!chatIdFromPath();
-    if (location.pathname !== lastPath) { lastPath = location.pathname; if (!inChat) close(); }
+    if (location.pathname !== lastPath) { lastPath = location.pathname; fails = 0; if (!inChat) close(); }
     const placed = inChat && ensureInline();
     if (!inChat) document.getElementById(INLINE_ID)?.remove();
-    $('.fab').classList.toggle('show', inChat && !placed);
+    fails = placed ? 0 : fails + 1;
+    // 입력창 줄에 못 넣었을 때만(약 5초 뒤) 예전 떠 있는 # 버튼을 대신 보여줘요.
+    $('.fab').classList.toggle('show', inChat && !placed && fails > 6);
   }, 800);
 })();
